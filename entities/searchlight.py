@@ -24,10 +24,13 @@ class Searchlight:
         self.mount_y = float(mount_y)
 
         # Sweeping parameters (Rule 4: Rotation)
-        self.base_angle = math.radians(72.0)  # Aimed downward-left/right across catwalk
-        self.sweep_amp = math.radians(38.0)
+        # base_angle uses atan2(dx,dy) convention: 0=straight down, negative=left, positive=right
+        # Searchlight at x=790, catwalk at y=720: boy approaches from x=350 (left) to x=940 (right)
+        # Correct center angle to sweep across the catwalk: -20° points center-left of mount
+        self.base_angle = math.radians(-20.0)  # Aimed downward-left across catwalk
+        self.sweep_amp = math.radians(40.0)    # Sweeps -60° to +20°, covering catwalk x=371-878
         self.sweep_speed = 0.95  # Oscillation frequency
-        self.cone_half_angle = math.radians(13.0)
+        self.cone_half_angle = math.radians(16.0)  # Widened slightly for fair detection
         self.beam_reach = 650.0
 
         self.current_angle = self.base_angle
@@ -92,8 +95,8 @@ class Searchlight:
 
     def check_boy_in_beam(self, boy, left_angle: float, right_angle: float, floor_y: float) -> bool:
         """Checks if boy's bounding box is illuminated by the spotlight cone."""
-        # Safe thresholds: generator alcove and lift shaft (x >= 940) or flooded floor (x <= 340)
-        if boy.x > 940.0 or boy.x < 340.0:
+        # Safe thresholds: generator alcove and lift shaft (x >= 940) or flooded floor spawn area (x <= 200)
+        if boy.x > 940.0 or boy.x < 200.0:
             return False
 
         dx = boy.x - self.mount_x
@@ -106,11 +109,16 @@ class Searchlight:
         if dist > self.beam_reach:
             return False
 
+        # Angle to boy using the same atan2(dx, dy) convention as the beam angles
         angle_to_boy = math.atan2(dx, dy)
-        min_angle = min(left_angle, right_angle)
-        max_angle = max(left_angle, right_angle)
 
-        return min_angle <= angle_to_boy <= max_angle
+        # Use angular difference from beam center to avoid min/max range failures
+        # when the beam angle straddles negative/positive values
+        angle_diff = angle_to_boy - self.current_angle
+        # Normalize to [-pi, pi]
+        angle_diff = (angle_diff + math.pi) % (2 * math.pi) - math.pi
+
+        return abs(angle_diff) <= self.cone_half_angle
 
     def check_locker_occlusion(self, boy, locker_rect: pygame.Rect) -> bool:
         """

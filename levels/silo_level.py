@@ -456,13 +456,13 @@ class SiloLevel:
         return killed
 
     def reset_checkpoint_phase2(self, boy):
-        """Respawns boy at the start of catwalk after searchlight death."""
-        boy.x = 370.0
-        boy.y = self.catwalk_y
+        """Respawns boy at the starting spawn point (intake pipe) after searchlight death."""
+        boy.x = self.spawn_x
+        boy.y = self.spawn_y
         boy.vx = 0.0
         boy.vy = 0.0
         boy.is_alive = True
-        boy.state = "grounded"
+        boy.state = "airborne"
         self.searchlight.reset_alert()
 
     def draw(self, surface: pygame.Surface, cam_x: float, cam_y: float):
