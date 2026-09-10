@@ -75,11 +75,23 @@ class StateManager:
         elif self.phase == LevelPhase.PHASE_3_BATTERY:
             if self.level.battery.is_on_lift and self.controller == ControllerMode.BOY:
                 self.phase = LevelPhase.PHASE_4_LIFT
-                self.objective_text = "Pull Master Lever to lower lift. Ride lift with battery to roof hatch."
 
         elif self.phase == LevelPhase.PHASE_4_LIFT:
-            if self.level.freight_lift.state == FreightLiftState.AT_ROOF:
+            if self.level.freight_lift.is_boy_on_lift(self.boy):
+                if self.level.freight_lift.state == FreightLiftState.AT_ROOF:
+                    self.objective_text = "At roof! Press E near hatch to escape, or press E on lift to ride DOWN."
+                elif self.level.freight_lift.state in (FreightLiftState.ASCENDING, FreightLiftState.LOWERING):
+                    self.objective_text = "Riding Freight Lift... (Press E on lift to toggle direction)"
+                elif self.level.freight_lift.state == FreightLiftState.LOWERED:
+                    self.objective_text = "On Freight Lift with battery. Press E to ride lift UP to the roof!"
+            elif self.level.freight_lift.state == FreightLiftState.AT_ROOF:
                 self.objective_text = "Force open the rusted ceiling hatch (Press E / Interact) to escape!"
+            elif self.level.freight_lift.state == FreightLiftState.LOWERED:
+                self.objective_text = "Step onto the Freight Lift platform with the battery to ascend."
+            elif self.level.master_lever.check_range(self.boy):
+                self.objective_text = "Master Lever: Press E to send Freight Lift DOWN to the lower floor."
+            else:
+                self.objective_text = "Pull Master Lever or step on Freight Lift to ride UP / DOWN."
 
         # ---------------------------------------------------------------------
         # Input Routing & Pawn Swapping (Rule 1 & Spec Phase 3)
@@ -101,17 +113,22 @@ class StateManager:
             if self.level.helmet.check_interaction(self.boy):
                 self.enter_mind_control()
 
-            # Check Master Lever pull in alcove
+            # Check Master Lever toggle in alcove
             if self.level.master_lever.check_range(self.boy) and input_handler.is_just_pressed(Action.INTERACT):
-                self.level.master_lever.pull()
-                self.level.freight_lift.trigger_lower()
+                self.level.master_lever.toggle()
+                self.level.freight_lift.toggle_move()
 
-            # Check Roof Hatch opening
-            if self.level.freight_lift.state == FreightLiftState.AT_ROOF:
-                if abs(self.boy.x - (self.level.roof_hatch.x + 50)) < 70 and input_handler.is_just_pressed(Action.INTERACT):
+            # Check Roof Hatch opening vs Lift Platform Switch
+            if self.level.freight_lift.state == FreightLiftState.AT_ROOF and not self.level.roof_hatch.is_open:
+                if abs(self.boy.x - (self.level.roof_hatch.x + 50)) < 55 and input_handler.is_just_pressed(Action.INTERACT):
                     self.level.roof_hatch.open()
                     self.phase = LevelPhase.VICTORY
                     self.victory_achieved = True
+                elif self.level.freight_lift.is_boy_on_lift(self.boy) and input_handler.is_just_pressed(Action.INTERACT):
+                    self.level.freight_lift.toggle_move()
+            elif self.level.freight_lift.is_boy_on_lift(self.boy):
+                if input_handler.is_just_pressed(Action.INTERACT):
+                    self.level.freight_lift.toggle_move()
 
         elif self.controller == ControllerMode.MIND_CONTROL_WORKERS:
             # Route inputs to WorkerGroup

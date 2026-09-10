@@ -40,6 +40,7 @@ class Boy:
         # State
         self.state = BoyState.AIRBORNE
         self.is_alive = True
+        self.is_grounded = False
         self.in_water = False
         self.water_depth = 0.0  # Depth submerged in water
 
@@ -48,6 +49,7 @@ class Boy:
         self.dragged_crate = None
         self.swinging_cable = None
         self.cable_length_grabbed = 0.0
+        self.cable_grab_cooldown = 0.0
         self.helmet_node = None
 
         # Dimensions & physics constants
@@ -58,7 +60,7 @@ class Boy:
         self.sprint_speed = 280.0
         self.wade_speed = 95.0
         self.drag_speed = 70.0
-        self.jump_impulse = -370.0
+        self.jump_impulse = -435.0
         self.gravity = 880.0
 
         # Limb rotation angles (in radians relative to parent joint)
@@ -111,44 +113,40 @@ class Boy:
         if move_dir != 0:
             self.facing = move_dir
 
-        is_crouching = input_handler.is_down(Action.CROUCH)
-        is_sprinting = input_handler.is_down(Action.SPRINT) and not self.in_water and not is_crouching
+        is_crouching = input_handler.is_down(Action.CROUCH) and self.is_grounded
+        is_sprinting = input_handler.is_down(Action.SPRINT) and not self.in_water and not is_crouching and self.is_grounded
 
         # Speed calculation based on environment / water drag
         if self.in_water:
-            # Water drag severely limits movement; sprinting prohibited
+            # Water drag limits movement; sprinting prohibited
             speed = self.wade_speed
-            self.state = BoyState.WADING
         elif is_crouching:
             speed = self.walk_speed * 0.5
-            self.state = BoyState.CROUCHING
         elif is_sprinting:
             speed = self.sprint_speed
-            self.state = BoyState.GROUNDED
         else:
             speed = self.walk_speed
-            self.state = BoyState.GROUNDED
 
         # Acceleration and movement
         target_vx = move_dir * speed
-        accel = 12.0 if self.state != BoyState.AIRBORNE else 6.0
+        accel = 12.0 if self.is_grounded else 6.0
         self.vx += (target_vx - self.vx) * min(1.0, accel * dt)
 
-        # Apply gravity with water buoyancy/drag dampening
-        if self.in_water:
-            # Damped buoyancy in knee-deep water
-            self.vy += (self.gravity * 0.5) * dt
-            self.vy *= (1.0 - 4.0 * dt)
-        else:
-            self.vy += self.gravity * dt
+        # Jump mechanics - strictly grounded only (prevents infinite air jumping)
+        if input_handler.is_just_pressed(Action.JUMP) and self.is_grounded and not is_crouching:
+            # Full launch impulse from floor or water
+            self.vy = self.jump_impulse
+            self.is_grounded = False
+            self.state = BoyState.AIRBORNE
 
-        # Jump mechanics
-        if input_handler.is_just_pressed(Action.JUMP) and self.state != BoyState.AIRBORNE:
-            if not is_crouching:
-                # Water dampens jump impulse
-                jump_power = self.jump_impulse * (0.75 if self.in_water else 1.0)
-                self.vy = jump_power
-                self.state = BoyState.AIRBORNE
+        # Apply gravity only when airborne
+        if not self.is_grounded:
+            if self.in_water:
+                # Damped buoyancy in knee-deep water
+                self.vy += (self.gravity * 0.5) * dt
+                self.vy *= (1.0 - 4.0 * dt)
+            else:
+                self.vy += self.gravity * dt
 
         # Custom Translation integration (Rule 2)
         self.x += self.vx * dt
@@ -163,27 +161,40 @@ class Boy:
             self.x = silo_right - half_w
             self.vx = 0.0
 
-        # Platform collisions (one-way and solid floors)
+        # Platform collisions (one-way, solid floors, and ledge mantle)
         was_grounded = False
         foot_y = self.y
         for plat in platforms:
             plat_left, plat_top, plat_w, plat_h = plat
             plat_right = plat_left + plat_w
-            plat_bottom = plat_top + plat_h
 
-            if plat_left <= self.x <= plat_right:
-                # Landing on top of platform
-                if self.vy >= 0 and (foot_y - self.vy * dt) <= plat_top + 10 and foot_y >= plat_top:
+            if plat_left - 14.0 <= self.x <= plat_right + 14.0:
+                # Standard landing on top of platform
+                if self.vy >= 0 and (foot_y - self.vy * dt - 6.0) <= plat_top + 12.0 and foot_y >= plat_top - 6.0:
                     self.y = plat_top
                     self.vy = 0.0
                     was_grounded = True
                     break
+                # Ledge mantle assist (hands reaching top rim of crate or elevated platform)
+                elif plat_h <= 50.0 and (-12.0 <= foot_y - plat_top <= 54.0) and self.vy > -320.0:
+                    self.y = plat_top
+                    self.vy = 0.0
+                    was_grounded = True
+                    if self.x < plat_left:
+                        self.x = plat_left + 8.0
+                    elif self.x > plat_right:
+                        self.x = plat_right - 8.0
+                    break
 
-        if not was_grounded and not self.in_water:
+        self.is_grounded = was_grounded
+        if not self.is_grounded:
             self.state = BoyState.AIRBORNE
-        elif was_grounded:
+        else:
+            self.cable_grab_cooldown = 0.0
             if is_crouching:
                 self.state = BoyState.CROUCHING
+            elif self.in_water:
+                self.state = BoyState.WADING
             else:
                 self.state = BoyState.GROUNDED
 
@@ -226,13 +237,20 @@ class Boy:
             self.update_crate_dragging(input_handler, dt, crate, water_y, platforms, silo_left, silo_right)
             return
 
+        if self.cable_grab_cooldown > 0.0:
+            self.cable_grab_cooldown -= dt
+
         # Check for cable grab initiation
-        if cable is not None and input_handler.is_down(Action.INTERACT) and self.state == BoyState.AIRBORNE:
+        if cable is not None and self.state == BoyState.AIRBORNE and self.cable_grab_cooldown <= 0.0:
             tip_x, tip_y = cable.get_tip_position()
-            dist_sq = (self.x - tip_x) ** 2 + ((self.y - 30) - tip_y) ** 2
-            if dist_sq < 45.0 ** 2:
+            dist_sq = (self.x - tip_x) ** 2 + ((self.y - 30.0) - tip_y) ** 2
+            # Responsive grab: when holding E, holding Jump, or airborne contact near hook
+            wants_grab = input_handler.is_down(Action.INTERACT) or input_handler.is_down(Action.JUMP) or (dist_sq < 42.0 ** 2)
+            if wants_grab and dist_sq < 75.0 ** 2:
                 self.state = BoyState.SWINGING
                 self.swinging_cable = cable
+                self.vx = 0.0
+                self.vy = 0.0
                 return
 
         # Check for crate grab initiation
@@ -254,23 +272,44 @@ class Boy:
         """Swings on the dynamic rope/cable using pendulum kinematics."""
         # Release input
         if input_handler.is_just_pressed(Action.DISENGAGE) or input_handler.is_just_pressed(Action.JUMP):
-            # Launch off rope with tangential momentum + upward impulse
-            launch_vx = cable.get_tangential_velocity_x() * 1.3
-            launch_vy = min(-200.0, cable.get_tangential_velocity_y() - 150.0)
+            tip_x, tip_y = cable.get_tip_position()
+            feet_y = tip_y + 40.0
+            catwalk_y = 720.0
+            catwalk_right = 950.0
+
+            # Forward swing release (towards the upper deck / catwalk)
+            if cable.angular_vel > 0 or cable.angle > 0.05:
+                height_diff = feet_y - catwalk_y
+                if height_diff > 20.0:
+                    needed_vy = -math.sqrt(2.0 * 980.0 * (height_diff + 24.0))
+                    launch_vy = max(-820.0, min(-340.0, needed_vy))
+                elif height_diff > -10.0:
+                    launch_vy = -220.0
+                else:
+                    launch_vy = -80.0
+
+                # Gentle forward speed carrying boy onto catwalk
+                launch_vx = max(110.0, min(190.0, (880.0 - tip_x) * 0.35))
+            else:
+                # Backward swing release (back toward flooded ground)
+                launch_vx = min(-120.0, cable.get_tangential_velocity_x())
+                launch_vy = -280.0
+
             self.state = BoyState.AIRBORNE
             self.vx = launch_vx
             self.vy = launch_vy
             self.body_angle = 0.0
             self.swinging_cable = None
+            self.cable_grab_cooldown = 1.0  # Cooldown prevents mid-flight re-grab
             return
 
         # Pumping swing momentum with Move Left / Move Right
         pump_torque = 0.0
         if input_handler.is_down(Action.MOVE_LEFT):
-            pump_torque -= 4.0
+            pump_torque -= 5.5
             self.facing = -1
         elif input_handler.is_down(Action.MOVE_RIGHT):
-            pump_torque += 4.0
+            pump_torque += 5.5
             self.facing = 1
 
         cable.apply_swing_torque(pump_torque, dt)

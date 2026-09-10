@@ -33,11 +33,11 @@ class Searchlight:
         self.current_angle = self.base_angle
         self.time = 0.0
 
-        # Detection & Alert state
         self.is_alerted = False
         self.alert_timer = 0.0
-        self.kill_delay = 0.28  # Reaction grace window before ceiling grid electrocution
+        self.kill_delay = 0.28
         self.kill_triggered = False
+        self.is_disabled = False
 
         # Electric arc sparks for ceiling grid
         self.electric_arcs: List[Tuple[float, float, float, float]] = []
@@ -54,6 +54,9 @@ class Searchlight:
         # Calculate beam ray endpoints at catwalk level
         left_angle = self.current_angle - self.cone_half_angle
         right_angle = self.current_angle + self.cone_half_angle
+
+        if self.is_disabled:
+            return False
 
         # If already triggered kill
         if self.kill_triggered:
@@ -89,6 +92,10 @@ class Searchlight:
 
     def check_boy_in_beam(self, boy, left_angle: float, right_angle: float, floor_y: float) -> bool:
         """Checks if boy's bounding box is illuminated by the spotlight cone."""
+        # Safe thresholds: generator alcove and lift shaft (x >= 940) or flooded floor (x <= 340)
+        if boy.x > 940.0 or boy.x < 340.0:
+            return False
+
         dx = boy.x - self.mount_x
         dy = (boy.y - 28.0) - self.mount_y  # Boy center height
 

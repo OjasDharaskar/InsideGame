@@ -33,26 +33,30 @@ class PowerCable:
     """
     Spline-based dynamic swinging rope/cable.
     Pendulum physics driven by gravity, damping, and player pump torque.
+    Anchored to high ceiling truss overhead, providing a sweeping arc to launch onto the catwalk.
     """
-    def __init__(self, pivot_x: float, pivot_y: float, length: float = 220.0):
+    def __init__(self, pivot_x: float, pivot_y: float, length: float = 800.0):
         self.pivot_x = float(pivot_x)
         self.pivot_y = float(pivot_y)
         self.length = float(length)
         self.angle = 0.0  # Radians (0 = hanging straight down)
         self.angular_vel = 0.0
-        self.damping = 0.65
-        self.gravity = 9.81 * 40.0
+        self.damping = 0.38  # Smooth damping for weighty industrial feel
+        self.gravity = 9.81 * 60.0
+        self.max_angular_vel = 1.8  # Max rotation speed in rad/s
 
     def apply_swing_torque(self, torque: float, dt: float):
         self.angular_vel += torque * dt
+        self.angular_vel = max(-self.max_angular_vel, min(self.max_angular_vel, self.angular_vel))
 
     def update(self, dt: float):
         # Pendulum equation: d^2θ/dt^2 = -(g/L) sin(θ) - damping * dθ/dt
         accel = -(self.gravity / self.length) * math.sin(self.angle) - self.damping * self.angular_vel
         self.angular_vel += accel * dt
-        # Clamp maximum swing angle
+        self.angular_vel = max(-self.max_angular_vel, min(self.max_angular_vel, self.angular_vel))
         self.angle += self.angular_vel * dt
-        self.angle = max(-math.radians(65), min(math.radians(65), self.angle))
+        # Clamp maximum swing angle to ±60 degrees
+        self.angle = max(-math.radians(60), min(math.radians(60), self.angle))
 
     def get_tip_position(self) -> Tuple[float, float]:
         tip_x = self.pivot_x + self.length * math.sin(self.angle)
@@ -67,14 +71,18 @@ class PowerCable:
 
     def draw(self, surface: pygame.Surface, cam_x: float, cam_y: float):
         """Draws the dynamic cable as articulated chain segments."""
-        num_segments = 14
+        num_segments = 22
         seg_len = self.length / num_segments
 
         prev_x = self.pivot_x - cam_x
         prev_y = self.pivot_y - cam_y
 
+        # Ceiling girder truss supporting the pivot
+        ceiling_scr_y = 80.0 - cam_y
+        draw_bresenham_line(surface, prev_x, ceiling_scr_y, prev_x, prev_y, (120, 120, 120), thickness=3)
+
         # Anchor mount plate
-        draw_bresenham_rect(surface, prev_x - 8, prev_y - 6, 16, 6, (180, 180, 180), filled=True)
+        draw_bresenham_rect(surface, prev_x - 10, prev_y - 8, 20, 8, (190, 190, 190), filled=True)
 
         for i in range(1, num_segments + 1):
             cur_len = i * seg_len
@@ -87,7 +95,7 @@ class PowerCable:
             prev_x, prev_y = cur_x, cur_y
 
         # Weighted grab hook at the tip
-        draw_bresenham_circle(surface, prev_x, prev_y, 4.0, (240, 240, 240), filled=True)
+        draw_bresenham_circle(surface, prev_x, prev_y, 4.5, (240, 240, 240), filled=True)
 
 
 class FreightLiftState:
@@ -101,7 +109,8 @@ class FreightLiftState:
 class FreightLift:
     """
     Industrial freight lift kinetic platform.
-    State machine: Suspended -> Lowered -> Ascending -> At Roof.
+    Smooth multi-stop elevator mechanism connecting Lower Ledge, Mid Catwalk, and Roof Crown.
+    Reliably carries Boy, Battery Core, and Workers during both upward and downward transit.
     """
     def __init__(self, x: float, suspended_y: float, lowered_y: float, roof_y: float):
         self.x = float(x)
@@ -114,56 +123,102 @@ class FreightLift:
         self.roof_y = float(roof_y)
 
         self.state = FreightLiftState.SUSPENDED
-        self.speed = 100.0
-        self.has_power = False
+        self.target_y = float(suspended_y)
+        self.speed = 140.0
+        self.has_power = True
         self.battery_installed = False
-        self.switch_pressed = False
 
     @property
     def rect(self) -> pygame.Rect:
         return pygame.Rect(int(self.x), int(self.y), int(self.width), int(self.height))
 
-    def trigger_lower(self):
-        """Called when master lever is thrown."""
-        if self.state == FreightLiftState.SUSPENDED:
-            self.state = FreightLiftState.LOWERING
-            self.has_power = True
+    def is_boy_on_lift(self, boy) -> bool:
+        if not boy or not boy.is_alive:
+            return False
+        # Horizontal check
+        if self.x - 8.0 <= boy.x <= self.x + self.width + 8.0:
+            # Vertical check (feet near or on platform)
+            if abs(boy.y - self.y) < 18.0 or (self.y - 12.0 <= boy.y <= self.y + 25.0):
+                return True
+        return False
 
-    def trigger_ascent(self):
-        """Called when boy steps on switch with battery loaded."""
-        if self.state == FreightLiftState.LOWERED and self.battery_installed:
-            self.state = FreightLiftState.ASCENDING
+    def trigger_lower(self, target_y: float = None):
+        """Commands lift to lower down."""
+        self.target_y = target_y if target_y is not None else self.lowered_y
+        self.state = FreightLiftState.LOWERING
+
+    def trigger_ascent(self, target_y: float = None):
+        """Commands lift to ascend up."""
+        if target_y is not None:
+            self.target_y = target_y
+        else:
+            self.target_y = self.roof_y if self.battery_installed else self.suspended_y
+        self.state = FreightLiftState.ASCENDING
+
+    def toggle_move(self):
+        """Toggles between lowering and ascending depending on current position and state."""
+        # If currently lowering -> reverse to ascending
+        if self.state == FreightLiftState.LOWERING:
+            self.trigger_ascent()
+            return
+        # If currently ascending -> reverse to lowering
+        if self.state == FreightLiftState.ASCENDING:
+            self.trigger_lower(self.lowered_y)
+            return
+
+        # If stationary at or near lower level
+        if self.y >= self.lowered_y - 20.0:
+            target = self.roof_y if self.battery_installed else self.suspended_y
+            self.trigger_ascent(target)
+        # If stationary at or near roof
+        elif self.y <= self.roof_y + 20.0:
+            self.trigger_lower(self.lowered_y)
+        # If stationary at catwalk
+        else:
+            self.trigger_lower(self.lowered_y)
 
     def update(self, dt: float, boy, battery):
-        if self.state == FreightLiftState.LOWERING:
-            self.y += self.speed * dt
-            if self.y >= self.lowered_y:
-                self.y = self.lowered_y
-                self.state = FreightLiftState.LOWERED
-
-        elif self.state == FreightLiftState.ASCENDING:
-            self.y -= self.speed * dt
-            # Move loaded battery and boy with lift
-            if self.battery_installed and battery:
-                battery.y = self.y - battery.height
-            if boy and abs(boy.x - (self.x + self.width / 2)) < self.width / 2:
-                if abs(boy.y - self.y) < 15:
-                    boy.y = self.y
-
-            if self.y <= self.roof_y:
-                self.y = self.roof_y
-                self.state = FreightLiftState.AT_ROOF
+        boy_on_lift = self.is_boy_on_lift(boy)
 
         # Check battery presence on lift
-        if battery and not self.battery_installed:
-            if self.rect.inflate(10, 10).colliderect(battery.rect) or battery.is_on_lift:
-                self.battery_installed = True
-                battery.is_on_lift = True
+        if battery:
+            if not self.battery_installed:
+                if self.rect.inflate(16, 16).colliderect(battery.rect) or battery.is_on_lift:
+                    self.battery_installed = True
+                    battery.is_on_lift = True
+            elif battery.is_on_lift:
+                battery.x = self.x + 20.0
 
-        # Check boy stepping on lift floor switch
-        if self.state == FreightLiftState.LOWERED and self.battery_installed and boy:
-            if self.x <= boy.x <= self.x + self.width and abs(boy.y - self.y) < 20:
-                self.trigger_ascent()
+        # Movement execution
+        if self.state == FreightLiftState.LOWERING:
+            self.y += self.speed * dt
+            if self.y >= self.target_y:
+                self.y = self.target_y
+                self.state = FreightLiftState.LOWERED
+        elif self.state == FreightLiftState.ASCENDING:
+            self.y -= self.speed * dt
+            if self.y <= self.target_y:
+                self.y = self.target_y
+                if self.target_y <= self.roof_y + 15.0:
+                    self.state = FreightLiftState.AT_ROOF
+                else:
+                    self.state = FreightLiftState.SUSPENDED
+
+        # Solid passenger attachment: carry boy and battery smoothly
+        if boy and boy_on_lift:
+            boy.y = self.y
+            boy.vy = 0.0
+            boy.is_grounded = True
+            if boy.state == "airborne":
+                boy.state = "grounded"
+
+        if battery and self.battery_installed:
+            battery.y = self.y - battery.height + 2.0
+            battery.vy = 0.0
+
+        # Automatic trigger: if boy steps on lift switch with battery installed at lower level
+        if self.state == FreightLiftState.LOWERED and self.battery_installed and boy_on_lift:
+            self.trigger_ascent(self.roof_y)
 
     def draw(self, surface: pygame.Surface, cam_x: float, cam_y: float):
         draw_x = self.x - cam_x
@@ -182,8 +237,8 @@ class FreightLift:
         draw_bresenham_line(surface, cable_l_x, ceiling_scr_y, cable_l_x, draw_y, (160, 160, 160), 2)
         draw_bresenham_line(surface, cable_r_x, ceiling_scr_y, cable_r_x, draw_y, (160, 160, 160), 2)
 
-        # Platform floor switch (indicator pad in center)
-        switch_color = (255, 255, 255) if (self.battery_installed and self.state == FreightLiftState.ASCENDING) else (120, 120, 120)
+        # Platform floor switch / control pad in center
+        switch_color = (255, 255, 255) if (self.state in (FreightLiftState.ASCENDING, FreightLiftState.LOWERING)) else (140, 140, 140)
         draw_bresenham_rect(surface, draw_x + self.width * 0.4, draw_y - 3, self.width * 0.2, 4, switch_color, filled=True)
 
 
@@ -219,20 +274,22 @@ class MindControlHelmet:
 
 
 class MasterLever:
-    """Master generator alcove lever to reroute power to the freight lift."""
+    """Master generator alcove lever to reroute power and control the freight lift."""
     def __init__(self, x: float, y: float):
         self.x = float(x)
         self.y = float(y)
         self.is_pulled = False
         self.handle_angle = -math.radians(35)  # Points up-left
 
-    def pull(self):
-        if not self.is_pulled:
-            self.is_pulled = True
+    def toggle(self):
+        self.is_pulled = not self.is_pulled
+        if self.is_pulled:
             self.handle_angle = math.radians(40)  # Rotates down-right
+        else:
+            self.handle_angle = -math.radians(35) # Rotates up-left
 
     def check_range(self, boy) -> bool:
-        return abs(boy.x - self.x) < 32.0 and abs(boy.y - self.y) < 30.0
+        return abs(boy.x - self.x) < 36.0 and abs(boy.y - self.y) < 32.0
 
     def draw(self, surface: pygame.Surface, cam_x: float, cam_y: float):
         scr_x = self.x - cam_x
@@ -313,7 +370,7 @@ class SiloLevel:
 
         # Props
         self.crate = CargoCrate(x=140.0, y=1160.0, width=72.0, height=52.0)
-        self.power_cable = PowerCable(pivot_x=430.0, pivot_y=710.0, length=230.0)
+        self.power_cable = PowerCable(pivot_x=280.0, pivot_y=220.0, length=800.0)
 
         # Mid-level catwalk & stealth (Phase 2)
         self.catwalk_y = 720.0
