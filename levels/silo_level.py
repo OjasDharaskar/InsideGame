@@ -255,8 +255,11 @@ class MindControlHelmet:
 
     def check_interaction(self, boy) -> bool:
         """Checks if boy jumps up into helmet node."""
+        # Must be jumping upward into the dome (not dropping down or already in mind control)
+        if boy.vy > -20.0 or boy.state == "mind_control":
+            return False
         dist = math.sqrt((boy.x - self.x) ** 2 + ((boy.y - 48.0) - self.y) ** 2)
-        return dist < 22.0
+        return dist < 26.0
 
     def draw(self, surface: pygame.Surface, cam_x: float, cam_y: float):
         screen_x = self.x - cam_x

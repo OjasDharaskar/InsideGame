@@ -49,6 +49,7 @@ class StateManager:
 
         # Objective hint string
         self.objective_text = "Drop into water. Drag crate under power cable to reach catwalk."
+        self.helmet_cooldown = 0.0
 
     def update(self, input_handler: InputHandler, dt: float):
         # Handle death and checkpoint reload
@@ -58,6 +59,11 @@ class StateManager:
                 self.death_timer = 0.0
                 self.level.reset_checkpoint_phase2(self.boy)
             return
+
+        if self.helmet_cooldown > 0.0:
+            self.helmet_cooldown -= dt
+        if self.boy.is_grounded:
+            self.helmet_cooldown = 0.0
 
         # ---------------------------------------------------------------------
         # Phase Detection & Objective Updates
@@ -73,8 +79,12 @@ class StateManager:
                 self.objective_text = "Jump into Mind-Control Helmet to activate proxy workers."
 
         elif self.phase == LevelPhase.PHASE_3_BATTERY:
-            if self.level.battery.is_on_lift and self.controller == ControllerMode.BOY:
+            if self.level.battery.is_on_lift:
                 self.phase = LevelPhase.PHASE_4_LIFT
+                if self.controller == ControllerMode.BOY:
+                    self.objective_text = "Battery secured on lift! Pull Master Lever to lower lift."
+                else:
+                    self.objective_text = "Battery loaded onto lift! Press Q to return to Boy."
 
         elif self.phase == LevelPhase.PHASE_4_LIFT:
             if self.level.freight_lift.is_boy_on_lift(self.boy):
@@ -110,7 +120,7 @@ class StateManager:
             )
 
             # Check Mind-Control Helmet interaction (Entering Helmet)
-            if self.level.helmet.check_interaction(self.boy):
+            if self.helmet_cooldown <= 0.0 and self.level.helmet.check_interaction(self.boy):
                 self.enter_mind_control()
 
             # Check Master Lever toggle in alcove
@@ -142,8 +152,8 @@ class StateManager:
                 self.level.wall_right
             )
 
-            # Check for Disengage (Q or Space tap)
-            if input_handler.is_just_pressed(Action.DISENGAGE):
+            # Check for Disengage (Q or Space / Jump tap)
+            if input_handler.is_just_pressed(Action.DISENGAGE) or input_handler.is_just_pressed(Action.JUMP):
                 self.exit_mind_control()
 
         # Update environment physics
@@ -171,7 +181,8 @@ class StateManager:
         """Transfers control back to Boy."""
         self.controller = ControllerMode.BOY
         self.boy.state = BoyState.AIRBORNE
-        self.boy.vy = 50.0  # Drops back to alcove floor
+        self.boy.vy = 80.0  # Drops back to alcove floor
+        self.helmet_cooldown = 1.0  # Prevents immediate re-absorption
         self.level.helmet.is_active = False
         self.level.worker_group.set_mind_control(False)
         if self.level.battery.is_on_lift:
