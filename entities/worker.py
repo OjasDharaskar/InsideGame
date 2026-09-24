@@ -261,11 +261,28 @@ class WorkerGroup:
     Combined carry mass threshold >= 100 kg allows them to push the BatteryCore.
     """
     def __init__(self, spawn_x: float, spawn_y: float):
+        self.spawn_x = float(spawn_x)
+        self.spawn_y = float(spawn_y)
         self.workers = [
             Worker(spawn_x, spawn_y, offset_idx=0),
             Worker(spawn_x + 38.0, spawn_y, offset_idx=1)
         ]
         self.is_linked = False
+
+    def reset(self):
+        """Resets workers to dormant spawn positions for a full level restart."""
+        self.is_linked = False
+        spawn_offsets = [0.0, 38.0]
+        for i, w in enumerate(self.workers):
+            w.x = self.spawn_x + spawn_offsets[i]
+            w.y = self.spawn_y
+            w.vx = 0.0
+            w.vy = 0.0
+            w.facing = 1
+            w.state = WorkerState.DORMANT
+            w.is_linked = False
+            w.spine_angle = 0.25
+            w.body_angle = 0.0
 
     @property
     def center_x(self) -> float:

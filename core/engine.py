@@ -66,7 +66,18 @@ class Engine:
         sys.exit(0)
 
     def update(self, dt: float):
+        # Restart on Game Over when SPACE / ENTER is pressed
+        if self.state_manager.game_over:
+            if self.input_handler.is_just_pressed(Action.JUMP) or self.input_handler.is_just_pressed(Action.INTERACT):
+                self._restart_game()
+            return
         self.state_manager.update(self.input_handler, dt)
+
+    def _restart_game(self):
+        """Reinitialises all game subsystems for a fresh start (called from Game Over screen)."""
+        self.level = SiloLevel()
+        self.boy = Boy(self.level.spawn_x, self.level.spawn_y)
+        self.state_manager = StateManager(self.boy, self.level)
 
     def render(self):
         # 1. Clear with deep monochrome chiaroscuro tone (near pitch black)
@@ -86,9 +97,12 @@ class Engine:
 
         # 5. Render HUD / Objectives / Prompts
         self.draw_hud()
+        self.draw_lives_hud()
 
-        # 6. Render Overlays (Death flash, Victory screen, Pause menu)
-        if not self.boy.is_alive:
+        # 6. Render Overlays (Death flash, Victory screen, Pause menu, Game Over)
+        if self.state_manager.game_over:
+            self.draw_game_over_screen()
+        elif not self.boy.is_alive:
             self.draw_death_overlay()
         elif self.state_manager.victory_achieved:
             self.draw_victory_screen()
@@ -136,15 +150,56 @@ class Engine:
         hint_rect = hint_surf.get_rect(bottomright=(self.width - 24, self.height - 24))
         self.screen.blit(hint_surf, hint_rect)
 
+    def draw_lives_hud(self):
+        """Renders 3 heart/life icons in the top-left corner of the screen."""
+        heart_size = 16
+        padding = 6
+        start_x = 24
+        start_y = 22
+
+        for i in range(self.state_manager.MAX_LIVES):
+            hx = start_x + i * (heart_size + padding)
+            hy = start_y
+            filled = i < self.state_manager.lives
+            color = (255, 255, 255) if filled else (60, 60, 60)
+
+            # Draw heart as two overlapping circles + triangle using pygame primitives
+            # (minimal Pygame usage for UI elements only, not gameplay geometry)
+            cx1 = hx + heart_size // 4
+            cx2 = hx + heart_size * 3 // 4
+            cy = hy + heart_size // 4
+            r = heart_size // 4
+            pygame.draw.circle(self.screen, color, (cx1, cy), r)
+            pygame.draw.circle(self.screen, color, (cx2, cy), r)
+            pts = [
+                (hx, cy),
+                (hx + heart_size // 2, hy + heart_size),
+                (hx + heart_size, cy)
+            ]
+            pygame.draw.polygon(self.screen, color, pts)
+
+        # "LIVES" label
+        label = self.font_hint.render("LIVES", True, (140, 140, 140))
+        self.screen.blit(label, (start_x, start_y + heart_size + 4))
+
     def draw_death_overlay(self):
-        """Whiteout electric shock effect upon electrocution."""
+        """Whiteout electric shock effect upon electrocution, shows lives remaining."""
         flash_surf = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
         flash_surf.fill((255, 255, 255, 120))
         self.screen.blit(flash_surf, (0, 0))
 
-        text_surf = self.font_title.render("ELECTROCUTED - HIGH VOLTAGE GRID", True, (20, 20, 20))
+        lives_left = self.state_manager.lives - 1  # Preview after this death resolves
+        if lives_left > 0:
+            msg = f"CAUGHT — {lives_left} {'LIFE' if lives_left == 1 else 'LIVES'} REMAINING"
+        else:
+            msg = "CAUGHT — LAST LIFE LOST"
+
+        text_surf = self.font_title.render(msg, True, (20, 20, 20))
         text_rect = text_surf.get_rect(center=(self.width // 2, self.height // 2))
         self.screen.blit(text_surf, text_rect)
+
+        sub = self.font_ui.render("All progress will be reset.", True, (40, 40, 40))
+        self.screen.blit(sub, sub.get_rect(center=(self.width // 2, self.height // 2 + 40)))
 
     def draw_victory_screen(self):
         """Victory escape screen."""
@@ -153,12 +208,34 @@ class Engine:
         self.screen.blit(overlay, (0, 0))
 
         title = self.font_title.render("ESCAPED THE SILO", True, (255, 255, 255))
-        sub = self.font_ui.render("You forced open the roof hatch and escaped into the cold rain.", True, (190, 190, 190))
+        sub = self.font_ui.render("You slipped through the exit door and vanished into the cold rain.", True, (190, 190, 190))
         instr = self.font_hint.render("Press ESC to exit.", True, (130, 130, 130))
 
         self.screen.blit(title, title.get_rect(center=(self.width // 2, self.height // 2 - 40)))
         self.screen.blit(sub, sub.get_rect(center=(self.width // 2, self.height // 2 + 10)))
         self.screen.blit(instr, instr.get_rect(center=(self.width // 2, self.height // 2 + 60)))
+
+    def draw_game_over_screen(self):
+        """Full-screen Game Over overlay — shown when all 3 lives are exhausted."""
+        overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 235))
+        self.screen.blit(overlay, (0, 0))
+
+        # Title
+        title = self.font_title.render("GAME OVER", True, (255, 255, 255))
+        self.screen.blit(title, title.get_rect(center=(self.width // 2, self.height // 2 - 60)))
+
+        # Subtitle
+        sub = self.font_ui.render("You were caught too many times. All progress lost.", True, (180, 180, 180))
+        self.screen.blit(sub, sub.get_rect(center=(self.width // 2, self.height // 2)))
+
+        # Restart prompt
+        prompt = self.font_ui.render("Press SPACE or E to restart from the beginning.", True, (220, 220, 220))
+        self.screen.blit(prompt, prompt.get_rect(center=(self.width // 2, self.height // 2 + 50)))
+
+        # ESC hint
+        esc_hint = self.font_hint.render("Press ESC to quit.", True, (100, 100, 100))
+        self.screen.blit(esc_hint, esc_hint.get_rect(center=(self.width // 2, self.height // 2 + 100)))
 
     def draw_pause_menu(self):
         """Pause overlay and full controls table."""

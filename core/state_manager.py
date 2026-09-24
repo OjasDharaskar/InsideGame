@@ -1,7 +1,7 @@
 """
 State Manager: Routes inputs to Boy or Proxy Minion Workers.
 Manages level progression phases, pawn swapping via Mind-Control Helmet,
-checkpoint respawning, and camera focus target.
+lives tracking, full-reset respawning, Game Over state, and camera focus target.
 """
 
 from enum import Enum, auto
@@ -27,6 +27,8 @@ class LevelPhase(Enum):
 
 
 class StateManager:
+    MAX_LIVES = 3
+
     def __init__(self, boy: Boy, level: SiloLevel):
         self.boy = boy
         self.level = level
@@ -41,7 +43,11 @@ class StateManager:
 
         # Death / Respawn timer
         self.death_timer = 0.0
-        self.respawn_delay = 1.2
+        self.respawn_delay = 1.4   # Slightly longer for dramatic effect
+
+        # 3-Lives system
+        self.lives = self.MAX_LIVES
+        self.game_over = False
 
         # Victory state
         self.victory_achieved = False
@@ -51,13 +57,40 @@ class StateManager:
         self.objective_text = "Drop into water. Drag crate under power cable to reach catwalk."
         self.helmet_cooldown = 0.0
 
+    def _do_full_reset(self):
+        """
+        Resets all game state for a fresh play-through after losing a life.
+        All level progress is wiped.
+        """
+        self.level.full_reset(self.boy)
+        self.phase = LevelPhase.PHASE_1_CRATE
+        self.controller = ControllerMode.BOY
+        self.death_timer = 0.0
+        self.helmet_cooldown = 0.0
+        self.objective_text = "Drop into water. Drag crate under power cable to reach catwalk."
+        # Reset camera to spawn area
+        self.cam_x = 0.0
+        self.cam_y = 600.0
+
     def update(self, input_handler: InputHandler, dt: float):
-        # Handle death and checkpoint reload
+        # ------------------------------------------------------------------
+        # Game Over: no more updates until engine restarts the game
+        # ------------------------------------------------------------------
+        if self.game_over:
+            return
+
+        # ------------------------------------------------------------------
+        # Handle death and life-loss
+        # ------------------------------------------------------------------
         if not self.boy.is_alive:
             self.death_timer += dt
             if self.death_timer >= self.respawn_delay:
-                self.death_timer = 0.0
-                self.level.reset_checkpoint_phase2(self.boy)
+                self.lives -= 1
+                if self.lives <= 0:
+                    self.game_over = True
+                    self.lives = 0
+                else:
+                    self._do_full_reset()
             return
 
         if self.helmet_cooldown > 0.0:
@@ -65,47 +98,54 @@ class StateManager:
         if self.boy.is_grounded:
             self.helmet_cooldown = 0.0
 
-        # ---------------------------------------------------------------------
+        # ------------------------------------------------------------------
         # Phase Detection & Objective Updates
-        # ---------------------------------------------------------------------
+        # ------------------------------------------------------------------
         if self.phase == LevelPhase.PHASE_1_CRATE:
             if self.boy.y <= self.level.catwalk_y + 10.0 and self.boy.x >= 350.0:
                 self.phase = LevelPhase.PHASE_2_SEARCHLIGHT
-                self.objective_text = "Cross catwalk. Crouch behind locker in shadow to evade searchlight."
+                self.objective_text = "Cross catwalk. Crouch behind the locked escape door to evade searchlight."
 
         elif self.phase == LevelPhase.PHASE_2_SEARCHLIGHT:
             if self.boy.x >= 950.0:  # Reached generator alcove
                 self.phase = LevelPhase.PHASE_3_BATTERY
-                self.objective_text = "Jump into Mind-Control Helmet to activate proxy workers."
+                self.objective_text = "Jump into Mind-Control Helmet to control workers. Push the battery onto the freight lift!"
 
         elif self.phase == LevelPhase.PHASE_3_BATTERY:
             if self.level.battery.is_on_lift:
                 self.phase = LevelPhase.PHASE_4_LIFT
                 if self.controller == ControllerMode.BOY:
-                    self.objective_text = "Battery secured on lift! Pull Master Lever to lower lift."
+                    self.objective_text = "Battery on lift! Pull Master Lever to send lift UP to catwalk level."
                 else:
-                    self.objective_text = "Battery loaded onto lift! Press Q to return to Boy."
+                    self.objective_text = "Battery loaded onto lift! Press Q to return to Boy. Then pull the lever."
 
         elif self.phase == LevelPhase.PHASE_4_LIFT:
-            if self.level.freight_lift.is_boy_on_lift(self.boy):
-                if self.level.freight_lift.state == FreightLiftState.AT_ROOF:
-                    self.objective_text = "At roof! Press E near hatch to escape, or press E on lift to ride DOWN."
-                elif self.level.freight_lift.state in (FreightLiftState.ASCENDING, FreightLiftState.LOWERING):
-                    self.objective_text = "Riding Freight Lift... (Press E on lift to toggle direction)"
-                elif self.level.freight_lift.state == FreightLiftState.LOWERED:
-                    self.objective_text = "On Freight Lift with battery. Press E to ride lift UP to the roof!"
-            elif self.level.freight_lift.state == FreightLiftState.AT_ROOF:
-                self.objective_text = "Force open the rusted ceiling hatch (Press E / Interact) to escape!"
-            elif self.level.freight_lift.state == FreightLiftState.LOWERED:
-                self.objective_text = "Step onto the Freight Lift platform with the battery to ascend."
-            elif self.level.master_lever.check_range(self.boy):
-                self.objective_text = "Master Lever: Press E to send Freight Lift DOWN to the lower floor."
+            # Door is unlocked manually via RoofConsole
+            if self.level.exit_door.is_locked:
+                if self.level.freight_lift.is_boy_on_lift(self.boy):
+                    if self.level.freight_lift.state == FreightLiftState.AT_ROOF:
+                        if self.level.roof_console.check_range(self.boy):
+                            self.objective_text = "Roof Console: Press E to activate it and unlock the escape door!"
+                        else:
+                            self.objective_text = "Step onto the roof platform and interact with the console."
+                    elif self.level.freight_lift.state in (FreightLiftState.ASCENDING, FreightLiftState.LOWERING):
+                        self.objective_text = "Riding Freight Lift… (Press E on lift to reverse direction)"
+                    elif self.level.freight_lift.state == FreightLiftState.LOWERED:
+                        self.objective_text = "On lower ledge. Step off, pull the Master Lever to send lift UP!"
+                    else:
+                        self.objective_text = "Lift is at catwalk. Press E to ride up to the roof."
+                elif self.level.master_lever.check_range(self.boy):
+                    self.objective_text = "Master Lever: Press E to send Freight Lift to the roof."
+                else:
+                    self.objective_text = "Ride the lift up to the roof with the battery."
             else:
-                self.objective_text = "Pull Master Lever or step on Freight Lift to ride UP / DOWN."
+                # Door is unlocked, player needs to reach it on the catwalk
+                if not self.level.exit_door.is_open:
+                    self.objective_text = "Escape door UNLOCKED! Ride the lift down to the catwalk and escape!"
 
-        # ---------------------------------------------------------------------
-        # Input Routing & Pawn Swapping (Rule 1 & Spec Phase 3)
-        # ---------------------------------------------------------------------
+        # ------------------------------------------------------------------
+        # Input Routing & Pawn Swapping
+        # ------------------------------------------------------------------
         if self.controller == ControllerMode.BOY:
             # Route inputs to Boy
             self.boy.update(
@@ -128,17 +168,26 @@ class StateManager:
                 self.level.master_lever.toggle()
                 self.level.freight_lift.toggle_move()
 
-            # Check Roof Hatch opening vs Lift Platform Switch
-            if self.level.freight_lift.state == FreightLiftState.AT_ROOF and not self.level.roof_hatch.is_open:
-                if abs(self.boy.x - (self.level.roof_hatch.x + 50)) < 55 and input_handler.is_just_pressed(Action.INTERACT):
-                    self.level.roof_hatch.open()
-                    self.phase = LevelPhase.VICTORY
-                    self.victory_achieved = True
-                elif self.level.freight_lift.is_boy_on_lift(self.boy) and input_handler.is_just_pressed(Action.INTERACT):
-                    self.level.freight_lift.toggle_move()
-            elif self.level.freight_lift.is_boy_on_lift(self.boy):
+            # Check Roof Console interaction
+            if self.level.roof_console.check_range(self.boy) and input_handler.is_just_pressed(Action.INTERACT):
+                if not self.level.roof_console.is_activated and self.level.freight_lift.battery_installed:
+                    self.level.roof_console.is_activated = True
+                    self.level.exit_door.unlock()
+            
+            # Check Freight Lift toggle via E (when boy is on lift, not near exit door or console)
+            elif self.level.freight_lift.is_boy_on_lift(self.boy) and not self.level.roof_console.check_range(self.boy):
                 if input_handler.is_just_pressed(Action.INTERACT):
                     self.level.freight_lift.toggle_move()
+
+            # Check Exit Door interaction (victory condition) — door is on the catwalk
+            if (not self.level.exit_door.is_locked
+                    and not self.level.exit_door.is_open
+                    and self.level.exit_door.check_interact(self.boy)
+                    and input_handler.is_just_pressed(Action.INTERACT)):
+                self.level.exit_door.open()
+                self.phase = LevelPhase.VICTORY
+                self.victory_achieved = True
+                self.objective_text = "ESCAPED! You slipped through the exit door into the cold rain."
 
         elif self.controller == ControllerMode.MIND_CONTROL_WORKERS:
             # Route inputs to WorkerGroup
@@ -175,7 +224,7 @@ class StateManager:
         self.boy.y = self.level.helmet.y + 44.0  # Suspended under dome
         self.level.helmet.is_active = True
         self.level.worker_group.set_mind_control(True)
-        self.objective_text = "Control twin workers. Push 100 kg battery onto freight lift platform. (Q: Disengage)"
+        self.objective_text = "Control twin workers. Push battery onto freight lift platform. (Q: Disengage)"
 
     def exit_mind_control(self):
         """Transfers control back to Boy."""
@@ -187,7 +236,7 @@ class StateManager:
         self.level.worker_group.set_mind_control(False)
         if self.level.battery.is_on_lift:
             self.phase = LevelPhase.PHASE_4_LIFT
-            self.objective_text = "Battery secured on lift! Pull Master Lever to lower lift."
+            self.objective_text = "Battery on lift! Pull Master Lever to send lift UP to the ceiling."
         else:
             self.objective_text = "Jump into Mind-Control Helmet to resume controlling workers."
 

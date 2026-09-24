@@ -7,8 +7,9 @@ Features:
 - Catwalk, bent steel locker, and searchlight hazard
 - Generator alcove with suspended Mind-Control Helmet and Master Lever
 - Freight Lift multi-stage elevator platform
-- Detached lower ledge with twin workers and 100 kg Battery Core
-- Rusted iron ceiling hatch exit
+- Detached lower ledge with twin workers
+- 100 kg Battery Core suspended on ceiling shelf (retrieved via freight lift)
+- Exit door on the right silo wall at the detached lower ledge level
 - Rain atmosphere and water rendering via Bresenham line and rect algorithms
 """
 
@@ -216,7 +217,7 @@ class FreightLift:
             battery.y = self.y - battery.height + 2.0
             battery.vy = 0.0
 
-        # Automatic trigger: if boy steps on lift switch with battery installed at lower level
+        # Automatic trigger: if boy steps on lift with battery at lower level
         if self.state == FreightLiftState.LOWERED and self.battery_installed and boy_on_lift:
             self.trigger_ascent(self.roof_y)
 
@@ -310,35 +311,94 @@ class MasterLever:
         draw_bresenham_circle(surface, handle_tip[0], handle_tip[1], 4.0, (255, 255, 255), filled=True)
 
 
-class RustedIronHatch:
-    """Silo roof access door. Opened to complete level."""
+class RoofConsole:
+    """Console at the roof level that must be activated to unlock the escape door."""
     def __init__(self, x: float, y: float):
         self.x = float(x)
         self.y = float(y)
-        self.width = 110.0
-        self.height = 16.0
-        self.is_open = False
-        self.open_angle = 0.0
+        self.is_activated = False
 
-    def open(self):
-        self.is_open = True
-        self.open_angle = -math.radians(75)
+    def check_range(self, boy) -> bool:
+        return abs(boy.x - self.x) < 40.0 and abs(boy.y - self.y) < 40.0
 
     def draw(self, surface: pygame.Surface, cam_x: float, cam_y: float):
         scr_x = self.x - cam_x
         scr_y = self.y - cam_y
 
+        draw_bresenham_rect(surface, scr_x - 12, scr_y - 20, 24, 20, (60, 60, 60), filled=True)
+        draw_bresenham_rect(surface, scr_x - 12, scr_y - 20, 24, 20, (180, 180, 180), filled=False, thickness=1)
+
+        # Screen/light on the console
+        color_light = (255, 255, 255) if self.is_activated else (100, 100, 100)
+        draw_bresenham_rect(surface, scr_x - 6, scr_y - 16, 12, 6, color_light, filled=True)
+
+
+class ExitDoor:
+    """
+    Industrial escape door built onto the catwalk level.
+    Locked until the Battery Core has reached the roof and the RoofConsole is activated.
+    """
+    def __init__(self, x: float, y: float):
+        self.x = float(x)   # Left edge of door frame
+        self.y = float(y)   # Top of door frame
+        self.width = 44.0   # Matches old locker width to provide stealth cover
+        self.height = 75.0
+        self.is_locked = True   # Locked until battery reaches ceiling
+        self.is_open = False
+        self.open_angle = 0.0
+
+    def unlock(self):
+        """Unlocks the door once battery has been delivered to the ceiling shelf."""
+        self.is_locked = False
+
+    def open(self):
+        self.is_open = True
+        self.open_angle = math.radians(85)  # Swings inward (left)
+
+    def check_interact(self, boy) -> bool:
+        """Returns True if boy is close enough to interact with the door."""
+        return (
+            abs(boy.x - (self.x + self.width / 2)) < 55.0
+            and abs(boy.y - (self.y + self.height)) < 40.0
+        )
+
+    def draw(self, surface: pygame.Surface, cam_x: float, cam_y: float):
+        scr_x = self.x - cam_x
+        scr_y = self.y - cam_y
+
+        frame_color = (190, 190, 190)
+        panel_color = (28, 28, 28)
+
+        # Dark door panel filled
+        draw_bresenham_rect(surface, scr_x, scr_y, self.width, self.height, panel_color, filled=True)
+
+        # Outer door frame (bright, thick)
+        draw_bresenham_rect(surface, scr_x, scr_y, self.width, self.height, frame_color, filled=False, thickness=3)
+
         if not self.is_open:
-            # Closed hatch plate
-            draw_bresenham_rect(surface, scr_x, scr_y, self.width, self.height, (45, 45, 45), filled=True)
-            draw_bresenham_rect(surface, scr_x, scr_y, self.width, self.height, (210, 210, 210), filled=False, thickness=2)
-            # Center lock wheel
-            draw_bresenham_circle(surface, scr_x + self.width / 2, scr_y + self.height / 2, 6.0, (180, 180, 180), filled=False)
+            # X cross-brace reinforcement (matching image 1 style)
+            draw_bresenham_line(surface, scr_x + 2, scr_y + 2,
+                                scr_x + self.width - 2, scr_y + self.height - 2,
+                                (110, 110, 110), 2)
+            draw_bresenham_line(surface, scr_x + self.width - 2, scr_y + 2,
+                                scr_x + 2, scr_y + self.height - 2,
+                                (110, 110, 110), 2)
+            # Lock / handle circle on right side
+            lock_color = (255, 255, 255) if self.is_locked else (80, 80, 80)
+            draw_bresenham_circle(surface, scr_x + self.width - 7, scr_y + self.height * 0.55,
+                                  4.0, lock_color, filled=True)
         else:
-            # Open hatch swung on hinge
-            m_hinge = Matrix3x3.translation(scr_x, scr_y).multiply(Matrix3x3.rotation(self.open_angle))
-            tip = m_hinge.transform_point(self.width, 0.0)
-            draw_bresenham_line(surface, scr_x, scr_y, tip[0], tip[1], (220, 220, 220), thickness=3)
+            # Open door swung on left hinge
+            hinge_x = scr_x
+            hinge_y = scr_y
+            m_hinge = Matrix3x3.translation(hinge_x, hinge_y).multiply(
+                Matrix3x3.rotation(self.open_angle)
+            )
+            tip = m_hinge.transform_point(self.width, self.height)
+            mid = m_hinge.transform_point(self.width, 0.0)
+            draw_bresenham_line(surface, hinge_x, hinge_y, mid[0], mid[1], frame_color, thickness=3)
+            draw_bresenham_line(surface, mid[0], mid[1], tip[0], tip[1], frame_color, thickness=3)
+            draw_bresenham_line(surface, hinge_x, hinge_y + self.height, tip[0], tip[1], (120, 120, 120), thickness=2)
 
 
 class RainDrop:
@@ -377,7 +437,6 @@ class SiloLevel:
 
         # Mid-level catwalk & stealth (Phase 2)
         self.catwalk_y = 720.0
-        self.locker_rect = pygame.Rect(640, int(self.catwalk_y - 68), 44, 68)
         self.searchlight = Searchlight(mount_x=790.0, mount_y=450.0)
 
         # Generator alcove (Phase 3 & 4)
@@ -387,6 +446,8 @@ class SiloLevel:
         # Detached lower ledge (Phase 3 minion puzzle)
         self.lower_ledge_y = 1170.0
         self.worker_group = WorkerGroup(spawn_x=1220.0, spawn_y=self.lower_ledge_y)
+
+        # Battery Core on the detached lower ledge (pushed by workers onto lift)
         self.battery = BatteryCore(x=1360.0, y=self.lower_ledge_y - 40.0)
 
         # Freight Lift Platform
@@ -397,8 +458,14 @@ class SiloLevel:
             roof_y=160.0
         )
 
-        # Ceiling maintenance hatch
-        self.roof_hatch = RustedIronHatch(x=1140.0, y=140.0)
+        # Roof Console for interacting when lift reaches the top
+        self.roof_console = RoofConsole(x=1200.0, y=160.0)
+
+        # Exit door on the catwalk (middle-left), also acts as stealth cover from searchlight
+        self.exit_door = ExitDoor(
+            x=640.0,                  # Placed on the catwalk at x=640 (where the locker used to be)
+            y=self.catwalk_y - 75.0   # Top of door; bottom sits on catwalk surface
+        )
 
         # Collision platforms: list of (x, y, w, h)
         self.platforms = [
@@ -424,6 +491,8 @@ class SiloLevel:
         plats.append((self.crate.x, self.crate.top_y, self.crate.width, 10.0))
         # Freight lift platform acts as solid ground
         plats.append((self.freight_lift.x, self.freight_lift.y, self.freight_lift.width, self.freight_lift.height))
+        # Small roof platform for the console
+        plats.append((self.roof_console.x - 25.0, self.roof_console.y, 50.0, 16.0))
         return plats
 
     def update(self, dt: float, boy) -> bool:
@@ -444,13 +513,15 @@ class SiloLevel:
         self.power_cable.update(dt)
 
         # Update searchlight hazard (Phase 2)
-        killed = self.searchlight.update(dt, boy, self.locker_rect, self.catwalk_y)
+        stealth_rect = pygame.Rect(int(self.exit_door.x), int(self.exit_door.y), int(self.exit_door.width), int(self.exit_door.height))
+        killed = self.searchlight.update(dt, boy, stealth_rect, self.catwalk_y)
 
         # Update freight lift
         self.freight_lift.update(dt, boy, self.battery)
 
         # Update battery physics if not loaded
         if not self.battery.is_on_lift:
+            # Battery rests on the lower ledge until workers push it onto the lift
             self.battery.update(dt, self.lower_ledge_y, 1190.0, self.wall_right)
 
         return killed
@@ -464,6 +535,65 @@ class SiloLevel:
         boy.is_alive = True
         boy.state = "airborne"
         self.searchlight.reset_alert()
+
+    def full_reset(self, boy):
+        """
+        Completely resets ALL level state to initial conditions.
+        Called when player loses a life — all progress is lost.
+        """
+        # Reset boy position and vitals
+        boy.x = self.spawn_x
+        boy.y = self.spawn_y
+        boy.vx = 0.0
+        boy.vy = 0.0
+        boy.is_alive = True
+        boy.state = "airborne"
+        boy.dragged_crate = None
+        boy.swinging_cable = None
+        boy.cable_grab_cooldown = 0.0
+
+        # Reset battery to lower ledge
+        self.battery.x = 1360.0
+        self.battery.y = self.lower_ledge_y - 40.0
+        self.battery.vx = 0.0
+        self.battery.vy = 0.0
+        self.battery.is_on_lift = False
+
+        # Reset freight lift to suspended position
+        self.freight_lift.y = self.freight_lift.suspended_y
+        self.freight_lift.target_y = self.freight_lift.suspended_y
+        self.freight_lift.state = FreightLiftState.SUSPENDED
+        self.freight_lift.battery_installed = False
+
+        # Reset master lever
+        self.master_lever.is_pulled = False
+        self.master_lever.handle_angle = -math.radians(35)
+
+        # Reset roof console
+        self.roof_console.is_activated = False
+
+        # Reset mind-control helmet
+        self.helmet.is_active = False
+
+        # Reset workers
+        self.worker_group.reset()
+
+        # Reset searchlight
+        self.searchlight.reset_alert()
+        self.searchlight.time = 0.0
+
+        # Reset exit door
+        self.exit_door.is_locked = True
+        self.exit_door.is_open = False
+        self.exit_door.open_angle = 0.0
+
+        # Reset crate to original position
+        self.crate.x = 140.0
+        self.crate.y = 1160.0
+        self.crate.vx = 0.0
+        self.crate.vy = 0.0
+        self.crate.is_grabbed = False
+        self.crate.grabbed_by = None
 
     def draw(self, surface: pygame.Surface, cam_x: float, cam_y: float):
         """Renders the entire silo environment in monochrome chiaroscuro via Bresenham rasterizer."""
@@ -495,15 +625,7 @@ class SiloLevel:
         for gx in range(int(catwalk_scr_x) + 8, int(catwalk_scr_x + 592), 16):
             draw_bresenham_line(surface, gx, catwalk_scr_y + 2, gx, catwalk_scr_y + 14, (90, 90, 90), 1)
 
-        # 3. Bent Steel Locker (Stealth Occluder)
-        scr_lock_x = self.locker_rect.x - cam_x
-        scr_lock_y = self.locker_rect.y - cam_y
-        draw_bresenham_rect(surface, scr_lock_x, scr_lock_y, self.locker_rect.width, self.locker_rect.height, (35, 35, 35), filled=True)
-        draw_bresenham_rect(surface, scr_lock_x, scr_lock_y, self.locker_rect.width, self.locker_rect.height, (170, 170, 170), filled=False, thickness=2)
-        # Bent dent diagonal crease
-        draw_bresenham_line(surface, scr_lock_x + 5, scr_lock_y + 12, scr_lock_x + self.locker_rect.width - 6, scr_lock_y + 36, (100, 100, 100), 1)
-
-        # 4. Generator Alcove
+        # 3. Generator Alcove
         alcove_scr_x = 950.0 - cam_x
         draw_bresenham_rect(surface, alcove_scr_x, catwalk_scr_y, 170.0, 20.0, (45, 45, 45), filled=True)
         draw_bresenham_rect(surface, alcove_scr_x, catwalk_scr_y, 170.0, 20.0, (190, 190, 190), filled=False, thickness=2)
@@ -511,26 +633,28 @@ class SiloLevel:
         draw_bresenham_line(surface, alcove_scr_x, catwalk_scr_y - 180, alcove_scr_x, catwalk_scr_y, (120, 120, 120), 2)
         draw_bresenham_line(surface, alcove_scr_x + 170, catwalk_scr_y - 180, alcove_scr_x + 170, catwalk_scr_y, (120, 120, 120), 2)
 
-        # 5. Detached Lower Ledge
+        # 4. Detached Lower Ledge
         ledge_scr_x = 1190.0 - cam_x
         ledge_scr_y = self.lower_ledge_y - cam_y
         draw_bresenham_rect(surface, ledge_scr_x, ledge_scr_y, 370.0, 30.0, (30, 30, 30), filled=True)
         draw_bresenham_rect(surface, ledge_scr_x, ledge_scr_y, 370.0, 30.0, (175, 175, 175), filled=False, thickness=2)
 
-        # 6. Props in scene
+        # 5. Props in scene
+        stealth_rect = pygame.Rect(int(self.exit_door.x), int(self.exit_door.y), int(self.exit_door.width), int(self.exit_door.height))
         self.crate.draw(surface, cam_x, cam_y)
         self.power_cable.draw(surface, cam_x, cam_y)
-        self.searchlight.draw(surface, cam_x, cam_y, self.catwalk_y, self.locker_rect)
+        self.searchlight.draw(surface, cam_x, cam_y, self.catwalk_y, stealth_rect)
         self.helmet.draw(surface, cam_x, cam_y)
         self.master_lever.draw(surface, cam_x, cam_y)
         self.battery.draw(surface, cam_x, cam_y)
         self.freight_lift.draw(surface, cam_x, cam_y)
-        self.roof_hatch.draw(surface, cam_x, cam_y)
+        self.roof_console.draw(surface, cam_x, cam_y)
+        self.exit_door.draw(surface, cam_x, cam_y)
 
-        # 7. Workers
+        # 6. Workers
         self.worker_group.draw(surface, cam_x, cam_y)
 
-        # 8. Flooded knee-deep water layer & surface ripples
+        # 9. Flooded knee-deep water layer & surface ripples
         water_scr_y = self.water_y - cam_y
         water_h = (self.floor_y + 60.0) - self.water_y
 
@@ -546,7 +670,7 @@ class SiloLevel:
             ripple_offset = math.sin(self.water_time * 3.5 + rx * 0.05) * 2.5
             draw_bresenham_line(surface, rx, water_scr_y + ripple_offset, rx + step, water_scr_y - ripple_offset, water_line_color, 1)
 
-        # 9. Falling cold rain streaks
+        # 10. Falling cold rain streaks
         rain_color = (160, 160, 160)
         for drop in self.raindrops:
             dx = drop.x - cam_x
