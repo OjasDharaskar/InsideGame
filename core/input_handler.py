@@ -18,6 +18,8 @@ class Action(Enum):
     SECONDARY = auto()
     DISENGAGE = auto()
     PAUSE = auto()
+    FIRE = auto()
+    RELOAD = auto()
 
 
 class InputHandler:
@@ -33,12 +35,14 @@ class InputHandler:
             Action.SECONDARY: [pygame.K_f],
             Action.DISENGAGE: [pygame.K_q],
             Action.PAUSE: [pygame.K_ESCAPE, pygame.K_p],
+            Action.RELOAD: [pygame.K_r, pygame.K_f],
         }
 
         # Mouse mappings: Action -> mouse button index (1: LMB, 3: RMB)
         self.mouse_bindings: Dict[Action, int] = {
             Action.INTERACT: 1,  # Left Mouse Button
             Action.SECONDARY: 3,  # Right Mouse Button
+            Action.FIRE: 1,      # Left Mouse Button (overrides INTERACT if combat is active)
         }
 
         self.current_actions: Set[Action] = set()

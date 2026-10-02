@@ -118,11 +118,9 @@ def draw_bresenham_circle(
             x_left1 = max(0, min(w - 1, ixc - x))
             x_right1 = max(0, min(w - 1, ixc + x))
             if 0 <= y_top < h:
-                for px in range(x_left1, x_right1 + 1):
-                    surface.set_at((px, y_top), color)
+                surface.fill(color, (x_left1, y_top, x_right1 - x_left1 + 1, 1))
             if 0 <= y_bot < h:
-                for px in range(x_left1, x_right1 + 1):
-                    surface.set_at((px, y_bot), color)
+                surface.fill(color, (x_left1, y_bot, x_right1 - x_left1 + 1, 1))
 
             # Pair 2: x level
             x_top = iyc - x
@@ -130,11 +128,9 @@ def draw_bresenham_circle(
             x_left2 = max(0, min(w - 1, ixc - y))
             x_right2 = max(0, min(w - 1, ixc + y))
             if 0 <= x_top < h:
-                for px in range(x_left2, x_right2 + 1):
-                    surface.set_at((px, x_top), color)
+                surface.fill(color, (x_left2, x_top, x_right2 - x_left2 + 1, 1))
             if 0 <= x_bot < h:
-                for px in range(x_left2, x_right2 + 1):
-                    surface.set_at((px, x_bot), color)
+                surface.fill(color, (x_left2, x_bot, x_right2 - x_left2 + 1, 1))
 
             if d > 0:
                 y -= 1
@@ -185,8 +181,7 @@ def draw_bresenham_rect(
         x_end = min(sw, ix + iw)
         for cy in range(y_start, y_end):
             # Scanline
-            for cx in range(x_start, x_end):
-                surface.set_at((cx, cy), color)
+            surface.fill(color, (x_start, cy, x_end - x_start, 1))
     else:
         # 4 edges via Bresenham line
         x2 = ix + iw - 1
@@ -245,5 +240,5 @@ def draw_bresenham_polygon(
         for i in range(0, len(intersections) - 1, 2):
             x_start = max(0, int(round(intersections[i])))
             x_end = min(surf_rect.width - 1, int(round(intersections[i + 1])))
-            for px in range(x_start, x_end + 1):
-                surface.set_at((px, y), color)
+            if x_end >= x_start:
+                surface.fill(color, (x_start, y, x_end - x_start + 1, 1))

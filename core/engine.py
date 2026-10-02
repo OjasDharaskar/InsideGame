@@ -13,6 +13,7 @@ from core.input_handler import Action, InputHandler
 from core.state_manager import StateManager, LevelPhase, ControllerMode
 from entities.boy import Boy
 from levels.silo_level import SiloLevel
+from levels.the_urban_outskirt import TheUrbanOutskirtLevel
 
 
 class Engine:
@@ -40,6 +41,8 @@ class Engine:
         self.level = SiloLevel()
         self.boy = Boy(self.level.spawn_x, self.level.spawn_y)
         self.state_manager = StateManager(self.boy, self.level)
+        self.current_level = 1
+        self.level2 = None
 
     def run(self):
         """Main game loop."""
@@ -66,12 +69,26 @@ class Engine:
         sys.exit(0)
 
     def update(self, dt: float):
-        # Restart on Game Over when SPACE / ENTER is pressed
-        if self.state_manager.game_over:
-            if self.input_handler.is_just_pressed(Action.JUMP) or self.input_handler.is_just_pressed(Action.INTERACT):
-                self._restart_game()
-            return
-        self.state_manager.update(self.input_handler, dt)
+        if self.current_level == 1:
+            # Restart on Game Over when SPACE / ENTER is pressed
+            if self.state_manager.game_over:
+                if self.input_handler.is_just_pressed(Action.JUMP) or self.input_handler.is_just_pressed(Action.INTERACT):
+                    self._restart_game()
+                return
+            self.state_manager.update(self.input_handler, dt)
+            
+            # Immediately start level 2 upon escaping
+            if self.state_manager.victory_achieved:
+                self.current_level = 2
+                self.level2 = TheUrbanOutskirtLevel()
+        elif self.current_level == 2:
+            if getattr(self.level2, 'game_over', False):
+                if self.input_handler.is_just_pressed(Action.JUMP) or self.input_handler.is_just_pressed(Action.INTERACT):
+                    self.level2.lives = self.level2.MAX_LIVES
+                    self.level2.game_over = False
+                    self.level2.full_reset()
+                return
+            self.level2.update(dt, self.input_handler)
 
     def _restart_game(self):
         """Reinitialises all game subsystems for a fresh start (called from Game Over screen)."""
@@ -83,31 +100,48 @@ class Engine:
         # 1. Clear with deep monochrome chiaroscuro tone (near pitch black)
         self.screen.fill((14, 15, 18))
 
-        cam_x = self.state_manager.cam_x
-        cam_y = self.state_manager.cam_y
+        if self.current_level == 1:
+            cam_x = self.state_manager.cam_x
+            cam_y = self.state_manager.cam_y
 
-        # 2. Render Environment, Props, Searchlight, Rain, Water, Workers
-        self.level.draw(self.screen, cam_x, cam_y)
+            # 2. Render Environment, Props, Searchlight, Rain, Water, Workers
+            self.level.draw(self.screen, cam_x, cam_y)
 
-        # 3. Render Protagonist Boy Stickman
-        self.boy.draw(self.screen, cam_x, cam_y)
+            # 3. Render Protagonist Boy Stickman
+            self.boy.draw(self.screen, cam_x, cam_y)
 
-        # 4. Render Atmospheric Vignette (Shadowed edges)
-        self.draw_vignette()
+            # 4. Render Atmospheric Vignette (Shadowed edges)
+            self.draw_vignette()
 
-        # 5. Render HUD / Objectives / Prompts
-        self.draw_hud()
-        self.draw_lives_hud()
+            # 5. Render HUD / Objectives / Prompts
+            self.draw_hud()
+            self.draw_lives_hud()
 
-        # 6. Render Overlays (Death flash, Victory screen, Pause menu, Game Over)
-        if self.state_manager.game_over:
-            self.draw_game_over_screen()
-        elif not self.boy.is_alive:
-            self.draw_death_overlay()
-        elif self.state_manager.victory_achieved:
-            self.draw_victory_screen()
-        elif self.is_paused:
-            self.draw_pause_menu()
+            # 6. Render Overlays (Death flash, Victory screen, Pause menu, Game Over)
+            if self.state_manager.game_over:
+                self.draw_game_over_screen()
+            elif not self.boy.is_alive:
+                self.draw_death_overlay()
+            elif self.is_paused:
+                self.draw_pause_menu()
+        elif self.current_level == 2:
+            # Render Level 2
+            self.level2.draw(self.screen, 0, 0)
+            self.draw_vignette()
+            
+            # 5. Render HUD
+            self.draw_hud()
+            self.draw_lives_hud()
+
+            # 6. Render Overlays
+            if getattr(self.level2, 'game_over', False):
+                self.draw_game_over_screen()
+            elif getattr(self.level2, 'victory_achieved', False):
+                self.draw_victory_screen()
+            elif not getattr(self.level2.boy, 'is_alive', True):
+                self.draw_death_overlay()
+            elif self.is_paused:
+                self.draw_pause_menu()
 
         pygame.display.flip()
 
@@ -121,7 +155,12 @@ class Engine:
     def draw_hud(self):
         """Minimalist atmospheric typography for objective and controls."""
         # Top banner: Current Objective
-        obj_surf = self.font_ui.render(self.state_manager.objective_text, True, (220, 220, 220))
+        if self.current_level == 1:
+            objective = self.state_manager.objective_text
+        else:
+            objective = self.level2.objective_text
+            
+        obj_surf = self.font_ui.render(objective, True, (220, 220, 220))
         obj_rect = obj_surf.get_rect(center=(self.width // 2, 34))
 
         # Backdrop plate
@@ -145,7 +184,10 @@ class Engine:
         self.screen.blit(ctrl_surf, (24, self.height - 38))
 
         # Bottom-right: Quick Controls Cheat-sheet
-        keys_hint = "A/D: Move | SPACE: Jump | S: Crouch (Cover) | E: Grab/Interact | SHIFT: Sprint | ESC: Pause"
+        if self.current_level == 1:
+            keys_hint = "A/D: Move | SPACE: Jump | S: Crouch (Cover) | E: Grab/Interact | SHIFT: Sprint | ESC: Pause"
+        else:
+            keys_hint = "A/D: Move | SPACE/LMB: Shoot | S: Crouch (Cover) | E: Pick up/Interact | ESC: Pause"
         hint_surf = self.font_hint.render(keys_hint, True, (140, 140, 140))
         hint_rect = hint_surf.get_rect(bottomright=(self.width - 24, self.height - 24))
         self.screen.blit(hint_surf, hint_rect)
@@ -157,10 +199,13 @@ class Engine:
         start_x = 24
         start_y = 22
 
-        for i in range(self.state_manager.MAX_LIVES):
+        max_lives = self.state_manager.MAX_LIVES if self.current_level == 1 else self.level2.MAX_LIVES
+        current_lives = self.state_manager.lives if self.current_level == 1 else self.level2.lives
+
+        for i in range(max_lives):
             hx = start_x + i * (heart_size + padding)
             hy = start_y
-            filled = i < self.state_manager.lives
+            filled = i < current_lives
             color = (255, 255, 255) if filled else (60, 60, 60)
 
             # Draw heart as two overlapping circles + triangle using pygame primitives
@@ -188,7 +233,8 @@ class Engine:
         flash_surf.fill((255, 255, 255, 120))
         self.screen.blit(flash_surf, (0, 0))
 
-        lives_left = self.state_manager.lives - 1  # Preview after this death resolves
+        current_lives = self.state_manager.lives if self.current_level == 1 else self.level2.lives
+        lives_left = current_lives - 1  # Preview after this death resolves
         if lives_left > 0:
             msg = f"CAUGHT — {lives_left} {'LIFE' if lives_left == 1 else 'LIVES'} REMAINING"
         else:
@@ -207,8 +253,8 @@ class Engine:
         overlay.fill((0, 0, 0, 210))
         self.screen.blit(overlay, (0, 0))
 
-        title = self.font_title.render("ESCAPED THE SILO", True, (255, 255, 255))
-        sub = self.font_ui.render("You slipped through the exit door and vanished into the cold rain.", True, (190, 190, 190))
+        title = self.font_title.render("Escaped The Urban Outskirt", True, (255, 255, 255))
+        sub = self.font_ui.render("You slipped through the sector gate into the unknown.", True, (190, 190, 190))
         instr = self.font_hint.render("Press ESC to exit.", True, (130, 130, 130))
 
         self.screen.blit(title, title.get_rect(center=(self.width // 2, self.height // 2 - 40)))
