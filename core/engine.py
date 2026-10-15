@@ -14,6 +14,7 @@ from core.state_manager import StateManager, LevelPhase, ControllerMode
 from entities.boy import Boy
 from levels.silo_level import SiloLevel
 from levels.the_urban_outskirt import TheUrbanOutskirtLevel
+from levels.the_central_core import TheCentralCoreLevel
 
 
 class Engine:
@@ -43,6 +44,7 @@ class Engine:
         self.state_manager = StateManager(self.boy, self.level)
         self.current_level = 1
         self.level2 = None
+        self.level3 = None
 
     def run(self):
         """Main game loop."""
@@ -90,6 +92,19 @@ class Engine:
                 return
             self.level2.update(dt, self.input_handler)
 
+            # Advance to Level 3 upon escaping Level 2
+            if getattr(self.level2, 'victory_achieved', False):
+                self.current_level = 3
+                self.level3 = TheCentralCoreLevel()
+        elif self.current_level == 3:
+            if getattr(self.level3, 'game_over', False):
+                if self.input_handler.is_just_pressed(Action.JUMP) or self.input_handler.is_just_pressed(Action.INTERACT):
+                    self.level3.lives = self.level3.MAX_LIVES
+                    self.level3.game_over = False
+                    self.level3.full_reset()
+                return
+            self.level3.update(dt, self.input_handler)
+
     def _restart_game(self):
         """Reinitialises all game subsystems for a fresh start (called from Game Over screen)."""
         self.level = SiloLevel()
@@ -136,9 +151,25 @@ class Engine:
             # 6. Render Overlays
             if getattr(self.level2, 'game_over', False):
                 self.draw_game_over_screen()
-            elif getattr(self.level2, 'victory_achieved', False):
-                self.draw_victory_screen()
             elif not getattr(self.level2.boy, 'is_alive', True):
+                self.draw_death_overlay()
+            elif self.is_paused:
+                self.draw_pause_menu()
+        elif self.current_level == 3:
+            # Render Level 3
+            self.level3.draw(self.screen, 0, 0)
+            self.draw_vignette()
+
+            # 5. Render HUD
+            self.draw_hud()
+            self.draw_lives_hud()
+
+            # 6. Render Overlays
+            if getattr(self.level3, 'game_over', False):
+                self.draw_game_over_screen()
+            elif getattr(self.level3, 'victory_achieved', False):
+                self.draw_victory_screen()
+            elif not getattr(self.level3.boy, 'is_alive', True):
                 self.draw_death_overlay()
             elif self.is_paused:
                 self.draw_pause_menu()
@@ -157,8 +188,10 @@ class Engine:
         # Top banner: Current Objective
         if self.current_level == 1:
             objective = self.state_manager.objective_text
-        else:
+        elif self.current_level == 2:
             objective = self.level2.objective_text
+        else:
+            objective = self.level3.objective_text
             
         obj_surf = self.font_ui.render(objective, True, (220, 220, 220))
         obj_rect = obj_surf.get_rect(center=(self.width // 2, 34))
@@ -173,7 +206,14 @@ class Engine:
         self.screen.blit(obj_surf, obj_rect)
 
         # Bottom-left: Active Controller Indicator
-        if self.state_manager.controller == ControllerMode.MIND_CONTROL_WORKERS:
+        if self.current_level == 3:
+            if getattr(self.level3, 'phase', '') == self.level3.PHASE_2_HIVE_MIND:
+                ctrl_text = "MIND CONTROL OVERDRIVE: CONTROLLING 6-WORKER SWARM (E: PUSH / INTERACT)"
+                ctrl_color = (255, 255, 255)
+            else:
+                ctrl_text = "CONTROLLING: BOY"
+                ctrl_color = (160, 160, 160)
+        elif self.state_manager.controller == ControllerMode.MIND_CONTROL_WORKERS:
             ctrl_text = "MIND CONTROL ACTIVE: CONTROLLING PROXY WORKERS (Q: RELEASE)"
             ctrl_color = (255, 255, 255)
         else:
@@ -186,8 +226,10 @@ class Engine:
         # Bottom-right: Quick Controls Cheat-sheet
         if self.current_level == 1:
             keys_hint = "A/D: Move | SPACE: Jump | S: Crouch (Cover) | E: Grab/Interact | SHIFT: Sprint | ESC: Pause"
-        else:
+        elif self.current_level == 2:
             keys_hint = "A/D: Move | SPACE/LMB: Shoot | S: Crouch (Cover) | E: Pick up/Interact | ESC: Pause"
+        else:
+            keys_hint = "A/D: Move | SPACE: Jump / Boost | E: Interact / Push | ESC: Pause"
         hint_surf = self.font_hint.render(keys_hint, True, (140, 140, 140))
         hint_rect = hint_surf.get_rect(bottomright=(self.width - 24, self.height - 24))
         self.screen.blit(hint_surf, hint_rect)
@@ -199,8 +241,15 @@ class Engine:
         start_x = 24
         start_y = 22
 
-        max_lives = self.state_manager.MAX_LIVES if self.current_level == 1 else self.level2.MAX_LIVES
-        current_lives = self.state_manager.lives if self.current_level == 1 else self.level2.lives
+        if self.current_level == 1:
+            max_lives = self.state_manager.MAX_LIVES
+            current_lives = self.state_manager.lives
+        elif self.current_level == 2:
+            max_lives = self.level2.MAX_LIVES
+            current_lives = self.level2.lives
+        else:
+            max_lives = self.level3.MAX_LIVES
+            current_lives = self.level3.lives
 
         for i in range(max_lives):
             hx = start_x + i * (heart_size + padding)
@@ -208,8 +257,6 @@ class Engine:
             filled = i < current_lives
             color = (255, 255, 255) if filled else (60, 60, 60)
 
-            # Draw heart as two overlapping circles + triangle using pygame primitives
-            # (minimal Pygame usage for UI elements only, not gameplay geometry)
             cx1 = hx + heart_size // 4
             cx2 = hx + heart_size * 3 // 4
             cy = hy + heart_size // 4
@@ -233,7 +280,13 @@ class Engine:
         flash_surf.fill((255, 255, 255, 120))
         self.screen.blit(flash_surf, (0, 0))
 
-        current_lives = self.state_manager.lives if self.current_level == 1 else self.level2.lives
+        if self.current_level == 1:
+            current_lives = self.state_manager.lives
+        elif self.current_level == 2:
+            current_lives = self.level2.lives
+        else:
+            current_lives = self.level3.lives
+
         lives_left = current_lives - 1  # Preview after this death resolves
         if lives_left > 0:
             msg = f"CAUGHT — {lives_left} {'LIFE' if lives_left == 1 else 'LIVES'} REMAINING"
@@ -250,13 +303,20 @@ class Engine:
     def draw_victory_screen(self):
         """Victory escape screen."""
         overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 210))
+        overlay.fill((0, 0, 0, 215))
         self.screen.blit(overlay, (0, 0))
 
-        title = self.font_title.render("Escaped The Urban Outskirt", True, (255, 255, 255))
-        sub = self.font_ui.render("You slipped through the sector gate into the unknown.", True, (190, 190, 190))
-        instr = self.font_hint.render("Press ESC to exit.", True, (130, 130, 130))
-
+        if self.current_level == 3:
+            title = self.font_title.render("THE CYCLE IS BROKEN — FREEDOM ACHIEVED", True, (255, 255, 255))
+            sub = self.font_ui.render("You breached the Central Core and emerged into the sunlight.", True, (210, 210, 210))
+            instr = self.font_hint.render("Press ESC to exit.", True, (130, 130, 130))
+        elif self.current_level == 2:
+            title = self.font_title.render("Escaped The Urban Outskirt", True, (255, 255, 255))
+            sub = self.font_ui.render("You slipped through the sector gate into the Central Core.", True, (190, 190, 190))
+            instr = self.font_hint.render("Press ESC to exit.", True, (130, 130, 130))
+        else:
+            title = self.font_title.render("Escaped The Watchtower Silo", True, (255, 255, 255))
+            sub = self.font_ui.render("You forced open the rusted hatch to the surface.", True, (190, 190, 190))
         self.screen.blit(title, title.get_rect(center=(self.width // 2, self.height // 2 - 40)))
         self.screen.blit(sub, sub.get_rect(center=(self.width // 2, self.height // 2 + 10)))
         self.screen.blit(instr, instr.get_rect(center=(self.width // 2, self.height // 2 + 60)))
